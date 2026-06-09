@@ -31,16 +31,22 @@ flowchart LR
 
 ```text
 data-visualizer/
-|-- main.py
+|-- main.py                  # Streamlit entrypoint
 |-- requirements.txt
 |-- README.md
 |-- .gitignore
-`-- data/
-    |-- diabetes.csv
-    |-- heart.csv
-    |-- parkinsons.csv
-    |-- tips.csv
-    `-- titanic.csv
+|-- data/                    # sample CSV files
+|-- src/
+|   `-- data_visualizer/
+|       |-- app.py           # UI orchestration
+|       |-- config.py        # paths and limits
+|       |-- data_io.py       # CSV loading and upload validation
+|       |-- profiling.py     # reusable data profile logic
+|       `-- plots.py         # chart validation and rendering
+|-- tests/
+|   |-- test_plots.py
+|   `-- test_profiling.py
+`-- .github/workflows/ci.yml
 ```
 
 ## Quick Start
@@ -69,11 +75,27 @@ source .venv/bin/activate
 
 The app currently limits uploaded CSV files to 25 MB through `MAX_UPLOAD_SIZE_MB` in `main.py`.
 
+## Development Workflow
+
+```bash
+set PYTHONPATH=src
+pytest -q
+python -m compileall main.py src
+streamlit run main.py
+```
+
+On macOS/Linux:
+
+```bash
+export PYTHONPATH=src
+```
+
 ## Quality Notes
 
 - The app validates empty files and incompatible chart selections.
 - Default datasets are cached with `st.cache_data`.
 - Matplotlib figures are closed after rendering to reduce memory growth during repeated chart generation.
+- Pure validation and profiling logic lives under `src/` and is covered by tests.
 
 ## Roadmap
 
