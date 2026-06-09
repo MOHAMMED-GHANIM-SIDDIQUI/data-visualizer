@@ -1,106 +1,151 @@
-import streamlit as st
-import pandas as pd
-import os
+from pathlib import Path
+
 import matplotlib.pyplot as plt
+import pandas as pd
 import seaborn as sns
+import streamlit as st
 
-# Set the page config
-st.set_page_config(page_title='Data Visualizer',
-                   layout='centered',
-                   page_icon='📊')
 
-# Title
-st.title('📊 Data Visualizer')
+APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = APP_DIR / "data"
+MAX_UPLOAD_SIZE_MB = 25
 
-working_dir = os.path.dirname(os.path.abspath(__file__))
 
-# Specify the folder where your CSV files are located
-folder_path = f"{working_dir}/data"  # Update this to your folder path
+st.set_page_config(
+    page_title="Data Visualizer",
+    layout="wide",
+    page_icon="chart_with_upwards_trend",
+)
 
-# List all files in the folder
-files = [f for f in os.listdir(folder_path) if f.endswith('.csv')]
 
-# Option for user to select between default or custom CSV file
-data_option = st.radio("Choose data source", ("Upload a CSV file", "Use default data"))
+@st.cache_data(show_spinner=False)
+def load_default_csv(file_name: str) -> pd.DataFrame:
+    return pd.read_csv(DATA_DIR / file_name)
 
-# Initialize df to avoid referencing an undefined variable
-df = None
 
-if data_option == "Upload a CSV file":
-    uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
+def read_uploaded_csv(uploaded_file) -> pd.DataFrame:
+    size_mb = uploaded_file.size / (1024 * 1024)
+    if size_mb > MAX_UPLOAD_SIZE_MB:
+        raise ValueError(f"Uploaded file is {size_mb:.1f} MB. Limit is {MAX_UPLOAD_SIZE_MB} MB.")
+    return pd.read_csv(uploaded_file)
 
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-        st.write("**Data Preview**:")
-        st.write(df.head())
-else:
-    # Let user select a file from default folder
-    selected_file = st.selectbox('Select a default file', files, index=None)
 
-    if selected_file:
-        # Construct the full path to the file
-        file_path = os.path.join(folder_path, selected_file)
+def get_default_files() -> list[str]:
+    if not DATA_DIR.exists():
+        return []
+    return sorted(path.name for path in DATA_DIR.glob("*.csv"))
 
-        # Read the selected CSV file
-        df = pd.read_csv(file_path)
 
-        st.write("**Data Preview**:")
-        st.write(df.head())  # Display the first few rows of the dataframe
+def validate_dataframe(df: pd.DataFrame) -> None:
+    if df.empty:
+        raise ValueError("The selected CSV has no rows.")
+    if df.columns.empty:
+        raise ValueError("The selected CSV has no columns.")
 
-# Ensure df is not None before proceeding
-if df is not None:
-    col1, col2 = st.columns(2)
 
+def render_overview(df: pd.DataFrame) -> None:
+    st.subheader("Dataset overview")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Rows", f"{len(df):,}")
+    c2.metric("Columns", f"{len(df.columns):,}")
+    c3.metric("Missing cells", f"{int(df.isna().sum().sum()):,}")
+
+    with st.expander("Preview", expanded=True):
+        st.dataframe(df.head(50), use_container_width=True)
+
+    with st.expander("Column profile"):
+        profile = pd.DataFrame(
+            {
+                "dtype": df.dtypes.astype(str),
+                "missing": df.isna().sum(),
+                "missing_pct": (df.isna().mean() * 100).round(2),
+                "unique_values": df.nunique(dropna=True),
+            }
+        )
+        st.dataframe(profile, use_container_width=True)
+
+    with st.expander("Descriptive statistics"):
+        st.dataframe(df.describe(include="all").transpose(), use_container_width=True)
+
+
+def render_plot(df: pd.DataFrame) -> None:
+    st.subheader("Visualization")
     columns = df.columns.tolist()
+    numeric_columns = df.select_dtypes(include="number").columns.tolist()
 
+    plot_type = st.selectbox(
+        "Chart type",
+        ["Scatter Plot", "Line Plot", "Bar Chart", "Distribution Plot", "Count Plot", "Box Plot"],
+    )
+
+    col1, col2 = st.columns(2)
     with col1:
-        st.write("**Data Overview:**")
-        st.write(df.describe())
-
+        x_axis = st.selectbox("X-axis", columns)
     with col2:
-        # Allow the user to select columns for plotting
-        x_axis = st.selectbox('Select the X-axis', options=columns+["None"])
-        y_axis = st.selectbox('Select the Y-axis', options=columns+["None"])
+        y_options = numeric_columns if plot_type not in {"Count Plot", "Distribution Plot"} else ["None"]
+        y_axis = st.selectbox("Y-axis", y_options)
 
-        plot_list = ['Line Plot', 'Bar Chart', 'Scatter Plot', 'Distribution Plot', 'Count Plot']
-        # Allow the user to select the type of plot
-        plot_type = st.selectbox('Select the type of plot', options=plot_list)
+    if st.button("Generate plot", type="primary"):
+        fig, ax = plt.subplots(figsize=(9, 5))
+        try:
+            if plot_type == "Scatter Plot":
+                sns.scatterplot(data=df, x=x_axis, y=y_axis, ax=ax)
+            elif plot_type == "Line Plot":
+                sns.lineplot(data=df, x=x_axis, y=y_axis, ax=ax)
+            elif plot_type == "Bar Chart":
+                sns.barplot(data=df, x=x_axis, y=y_axis, ax=ax)
+            elif plot_type == "Distribution Plot":
+                if x_axis not in numeric_columns:
+                    raise ValueError("Distribution plots require a numeric X-axis.")
+                sns.histplot(data=df, x=x_axis, kde=True, ax=ax)
+            elif plot_type == "Count Plot":
+                sns.countplot(data=df, x=x_axis, ax=ax)
+            elif plot_type == "Box Plot":
+                sns.boxplot(data=df, x=x_axis, y=y_axis, ax=ax)
 
-    # Generate the plot based on user selection
-    if st.button('Generate Plot'):
-
-        # Avoid using "None" as a valid axis for plotting
-        if x_axis != "None" and y_axis != "None":
-            fig, ax = plt.subplots(figsize=(6, 4))
-
-            if plot_type == 'Line Plot':
-                sns.lineplot(x=df[x_axis], y=df[y_axis], ax=ax)
-            elif plot_type == 'Bar Chart':
-                sns.barplot(x=df[x_axis], y=df[y_axis], ax=ax)
-            elif plot_type == 'Scatter Plot':
-                sns.scatterplot(x=df[x_axis], y=df[y_axis], ax=ax)
-            elif plot_type == 'Distribution Plot':
-                sns.histplot(df[x_axis], kde=True, ax=ax)
-                y_axis = 'Density'  # Set y-axis label only for Distribution Plot
-            elif plot_type == 'Count Plot':
-                sns.countplot(x=df[x_axis], ax=ax)
-                y_axis = 'Count'  # Set y-axis label for count plot
-
-            # Adjust label sizes
-            ax.tick_params(axis='x', labelsize=10)  # Adjust x-axis label size
-            ax.tick_params(axis='y', labelsize=10)  # Adjust y-axis label size
-
-            # Adjust title and axis labels with a smaller font size
-            plt.title(f'{plot_type} of {y_axis} vs {x_axis}', fontsize=12)
-            plt.xlabel(x_axis, fontsize=10)
-            plt.ylabel(y_axis, fontsize=10)
-
-            # Show the results
+            ax.set_title(f"{plot_type}: {x_axis}" + (f" vs {y_axis}" if y_axis != "None" else ""))
+            ax.tick_params(axis="x", labelrotation=30)
+            fig.tight_layout()
             st.pyplot(fig)
+        except Exception as exc:
+            st.error(f"Could not render chart: {exc}")
+        finally:
+            plt.close(fig)
+
+
+def main() -> None:
+    st.title("Data Visualizer")
+    st.caption("Explore built-in sample datasets or upload a CSV for quick profiling and charts.")
+
+    default_files = get_default_files()
+    data_option = st.radio("Choose data source", ("Use default data", "Upload a CSV file"), horizontal=True)
+
+    df = None
+    try:
+        if data_option == "Upload a CSV file":
+            uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
+            if uploaded_file is not None:
+                df = read_uploaded_csv(uploaded_file)
         else:
-            st.error("Please select valid columns for both X and Y axes.")
+            if not default_files:
+                st.warning("No sample CSV files were found in the data directory.")
+            else:
+                selected_file = st.selectbox("Select a sample dataset", default_files)
+                df = load_default_csv(selected_file)
 
-else:
-    st.error("Please upload a CSV file or select a default file to visualize the data.")
+        if df is None:
+            st.info("Choose a dataset to begin.")
+            return
 
-st.markdown("**Created by MOHAMMED GHANIM SIDIQUI**")
+        validate_dataframe(df)
+        render_overview(df)
+        render_plot(df)
+    except Exception as exc:
+        st.error(str(exc))
+
+    st.markdown("---")
+    st.caption("Created by Mohammed Ghanim Siddiqui")
+
+
+if __name__ == "__main__":
+    main()
